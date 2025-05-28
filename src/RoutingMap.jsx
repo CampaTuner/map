@@ -3,71 +3,102 @@ import L from 'leaflet';
 import 'leaflet-routing-machine';
 import 'leaflet/dist/leaflet.css';
 
-function RoutingMap({ destination }) {
-  const mapRef = useRef(null);
-  const routingControlRef = useRef(null);
-  const [source, setSource] = useState(null);
-  const [reached, setReached] = useState(false);
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
-  // Track user location in real-time
+// Fix Leaflet marker icons for production (e.g. Netlify)
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+});
+
+function RoutingMap({ destination, setSource }) {
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const routingControlRef = useRef(null);
+  const [currentLocation, setCurrentLocation] = useState(null);
+
   useEffect(() => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    const map = L.map('map').setView([0, 0], 13);
+    mapRef.current = map;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        setSource({ lat, lng });
+        const { latitude, longitude } = position.coords;
+        const latlng = [latitude, longitude];
+
+        setCurrentLocation({ lat: latitude, lng: longitude });
+        setSource({ lat: latitude, lng: longitude });
+
+        map.setView(latlng, 15);
+
+        // Update or create marker
+        if (markerRef.current) {
+          markerRef.current.setLatLng(latlng);
+        } else {
+          markerRef.current = L.marker(latlng, {
+            icon: L.icon({
+              iconUrl: 'https://maps.google.com/mapfiles/ms/icons/green-dot.png',
+              iconSize: [32, 32],
+            }),
+          }).addTo(map);
+        }
+
+        // Draw route if destination exists
+        if (destination) {
+          if (routingControlRef.current) {
+            routingControlRef.current.setWaypoints([latlng, [destination.lat, destination.lng]]);
+          } else {
+            routingControlRef.current = L.Routing.control({
+              waypoints: [latlng, [destination.lat, destination.lng]],
+              routeWhileDragging: false,
+              draggableWaypoints: false,
+              createMarker: function (i, wp) {
+                const iconUrl = i === 0
+                  ? 'https://maps.google.com/mapfiles/ms/icons/green-dot.png'
+                  : 'https://maps.google.com/mapfiles/ms/icons/red-dot.png';
+
+                return L.marker(wp.latLng, {
+                  icon: L.icon({
+                    iconUrl,
+                    iconSize: [32, 32],
+                  }),
+                });
+              },
+            }).addTo(map);
+          }
+
+          // Check if close to destination
+          const distance = map.distance(latlng, [destination.lat, destination.lng]);
+          if (distance < 30) {
+            alert('🎉 You have reached your destination!');
+            navigator.geolocation.clearWatch(watchId);
+          }
+        }
       },
       (error) => {
-        console.error('Error getting location:', error);
+        console.error('Geolocation error:', error.message);
         alert('Please enable location on your device.');
       },
-      { enableHighAccuracy: true, maximumAge: 0 }
+      { enableHighAccuracy: true }
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
-
-  // Initialize and update map + route
-  useEffect(() => {
-    if (!source || !destination) return;
-
-    if (!mapRef.current) {
-      const map = L.map('map').setView([source.lat, source.lng], 15);
-      mapRef.current = map;
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-    }
-
-    const map = mapRef.current;
-
-    // Remove previous routing control if exists
-    if (routingControlRef.current) {
-      routingControlRef.current.remove();
-    }
-
-    routingControlRef.current = L.Routing.control({
-      waypoints: [L.latLng(source.lat, source.lng), L.latLng(destination.lat, destination.lng)],
-      routeWhileDragging: false,
-      draggableWaypoints: false,
-      addWaypoints: false,
-      fitSelectedRoutes: true,
-      show: false,
-      createMarker: function () { return null; },
-    }).addTo(map);
-
-    // Check if source is close to destination
-    const distance = map.distance(
-      L.latLng(source.lat, source.lng),
-      L.latLng(destination.lat, destination.lng)
-    );
-
-    if (distance < 20 && !reached) {
-      setReached(true);
-      alert("🎉 You've reached your destination!");
-    }
-  }, [source, destination]);
-
-  return <div id="map" style={{ height: '100vh', width: '100%' }} />;
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+      map.remove();
+    };
+  }, [destination]);
+  return <div id="map" style={{ height: '90vh', width: '100%' }} />;
 }
 
 export default RoutingMap;
